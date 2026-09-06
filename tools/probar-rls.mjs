@@ -1044,9 +1044,14 @@ agregar('W. Eventos en lote', 'eventos_navegacion sigue cerrada a lectura',
 // la propia app, así que afirmar cifras absolutas sería atarse a un estado que
 // cambia solo. Lo que se comprueba es cuánto MUEVE cada recorrido inyectado.
 
+// SUMA todos los grupos de ese canal, no el primero. Desde que el embudo
+// se separa también por tipo de cliente hay varios grupos por canal, y un
+// find() habría medido uno solo mientras el caso decía medir el canal entero
+// — la trampa de comprobar la forma en vez de la propiedad que importa.
 const pasosDe = (r, canal) => {
-  const c = (r.datos?.canales || []).find((x) => x.canal === canal);
-  return c ? c.pasos.map((p) => p.sesiones) : [0, 0, 0, 0, 0, 0];
+  const gs = (r.datos?.canales || []).filter((x) => x.canal === canal);
+  return [0, 1, 2, 3, 4, 5].map((i) =>
+    gs.reduce((t, g) => t + (g.pasos[i]?.sesiones || 0), 0));
 };
 const embudo = (t, dias) =>
   pedir('POST', 'rpc/embudo_resumen', { p_data: { token: t, dias: dias || 30 } });

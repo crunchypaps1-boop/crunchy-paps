@@ -67,6 +67,7 @@ const andamio = [
   'const tokenVendedor = () => "";',
   'let clienteActual = null;',
   'let esVendedor = false;',
+  "let tipoCliente = 'consumidor';",
   'const location = { pathname: "/prueba", search: "" };',
   'const sessionStorage = { getItem: (k) => ({ cp_sid: "prueba-cola", utm_source: "ig" })[k] || "" };',
   'const document = {',
@@ -85,6 +86,7 @@ const andamio = [
 const cola = [
   'export { track, _evCola };',
   'export function setVendedor(v) { esVendedor = v; }',
+  'export function setTipo(t) { tipoCliente = t; }',
   'export const ocultarPestana = () => {',
   '  document.visibilityState = "hidden";',
   '  globalThis.__oyenteVisibilidad();',
@@ -278,8 +280,26 @@ reiniciar();
 mod.setVendedor(false);
 mod.track('view_catalog', {});
 await esperar(1, 9000);
-comprobar('sesión de consumidor: sin marca',
+comprobar('sesión de consumidor: sin marca de personal',
   (respuestas[0]?.enviados || []).every((e) => e.params?.v === undefined), 'limpio');
+
+// El tipo de cliente separa embudos que no se parecen: un tendero que repone
+// cada semana no se comporta como quien descubre la marca.
+reiniciar();
+mod.setTipo('tienda');
+mod.track('view_catalog', {});
+await esperar(1, 9000);
+comprobar('el tipo de cliente viaja en el evento',
+  (respuestas[0]?.enviados || [])[0]?.params?.t === 'tienda',
+  't=' + (respuestas[0]?.enviados || [])[0]?.params?.t);
+
+reiniciar();
+mod.setTipo('');
+mod.track('view_catalog', {});
+await esperar(1, 9000);
+comprobar('sin tipo elegido no se inventa uno',
+  (respuestas[0]?.enviados || [])[0]?.params?.t === undefined, 'limpio');
+mod.setTipo('consumidor');
 
 let fallos = 0;
 for (const p of pruebas) {

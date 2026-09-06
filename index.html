@@ -2916,6 +2916,29 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
         <button onclick="exportarResumenCSV()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:7px 12px;font-weight:800;font-size:0.74rem;cursor:pointer;white-space:nowrap;">⬇️ CSV</button>
       </div>
     </div>
+    <div id="filtro-informe" style="display:none;background:var(--gris);border-radius:14px;padding:10px 12px;margin-bottom:12px;">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+        <select id="fi-periodo" onchange="cambiarPeriodoInforme()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:6px 10px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+          <option value="mes">Mes en curso</option>
+          <option value="mes-1">Mes pasado</option>
+          <option value="7">Últimos 7 días</option>
+          <option value="30">Últimos 30 días</option>
+          <option value="90">Últimos 90 días</option>
+          <option value="libre">Rango a medida…</option>
+        </select>
+        <select id="fi-sabor" onchange="aplicarFiltroInforme()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:6px 10px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+          <option value="">Todos los sabores</option>
+        </select>
+        <select id="fi-pres" onchange="aplicarFiltroInforme()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:6px 10px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+          <option value="">Todas las presentaciones</option>
+        </select>
+        <span id="fi-libre" style="display:none;gap:6px;align-items:center;">
+          <input type="date" id="fi-desde" onchange="aplicarFiltroInforme()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:5px 8px;font-size:0.72rem;">
+          <input type="date" id="fi-hasta" onchange="aplicarFiltroInforme()" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:5px 8px;font-size:0.72rem;">
+        </span>
+      </div>
+      <div id="fi-nota" style="font-size:0.7rem;color:var(--suave);margin-top:6px;"></div>
+    </div>
     <div id="resumen-dash" style="margin-bottom:14px;"></div>
     <div id="resumen-produccion" style="margin-bottom:14px;"></div>
     <div id="resumen-stock" style="margin-bottom:14px;"></div>
@@ -3688,7 +3711,12 @@ function track(nombre, params) {
     // al embudo como si fueran de un cliente — y no es ruido neutro: abre el
     // checkout para cerrar una venta YA hecha, así que convierte casi al 100 %
     // y esconde la caída real. Va en `params` (jsonb): sin columnas nuevas.
+    // `v` = es personal · `t` = tipo de cliente (consumidor/tienda/restaurante/
+    // mayorista). Los dos separan embudos que no se parecen: un tendero que
+    // repone cada semana no se comporta como quien descubre la marca, y
+    // promediarlos da una cifra que no describe a ninguno.
     if (esVendedor) _params = Object.assign({}, _params, { v: 1 });
+    if (tipoCliente) _params = Object.assign({}, _params, { t: tipoCliente });
     if (nombre === 'purchase') {
       var _pri = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('first') : {};
       if (_pri.utm_source || _pri.utm_campaign) {
@@ -8698,6 +8726,125 @@ function mostrarNavResumen() {
 let _resumenCache = [];
 let _resumenSabores = {};
 
+// ══════════════════════════════════════════════════════════════════
+// Filtros compartidos del Informe (periodo y producto)
+// ══════════════════════════════════════════════════════════════════
+// Antes cada tarjeta traía su propio control y el dashboard no aceptaba
+// ninguno: el mes en curso estaba cableado dentro de la función de Postgres.
+//
+// Qué honra cada tarjeta, hoy:
+//   Dashboard          periodo + producto
+//   Embudo             su propio selector de días (por sabor no aplica:
+//                      una sesión ve muchos productos)
+//   Regalos, Kárdex    sus propios selectores (pendiente de unificar)
+//
+// Ojo con el filtro de producto: el dinero pasa a salir de los SUBTOTALES DE
+// LÍNEA que casan, no del total del pedido. Si no, filtrar por un sabor daría
+// el valor entero de los pedidos que lo llevan, con todo lo demás incluido.
+let _filtroInf = { periodo: 'mes', desde: '', hasta: '', sabor: '', presentacion: '' };
+let _catalogoFiltro = null;
+
+function _iso(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') +
+         '-' + String(d.getDate()).padStart(2, '0');
+}
+
+// Traduce la opción elegida a un rango de fechas concreto. `mes` devuelve
+// vacío a propósito: sin fechas, el servidor aplica su valor por defecto, que
+// es exactamente la vista de siempre.
+function _rangoInforme() {
+  const p = _filtroInf.periodo;
+  const hoy = new Date();
+  if (p === 'mes') return { desde: '', hasta: '' };
+  if (p === 'mes-1') {
+    const ini = new Date(hoy.getFullYear(), hoy.getMonth() - 1, 1);
+    const fin = new Date(hoy.getFullYear(), hoy.getMonth(), 0);
+    return { desde: _iso(ini), hasta: _iso(fin) };
+  }
+  if (p === 'libre') {
+    return {
+      desde: (document.getElementById('fi-desde') || {}).value || '',
+      hasta: (document.getElementById('fi-hasta') || {}).value || '',
+    };
+  }
+  const n = Number(p) || 30;
+  const ini = new Date(hoy.getTime() - (n - 1) * 86400000);
+  return { desde: _iso(ini), hasta: _iso(hoy) };
+}
+
+window.cambiarPeriodoInforme = function () {
+  _filtroInf.periodo = (document.getElementById('fi-periodo') || {}).value || 'mes';
+  const libre = document.getElementById('fi-libre');
+  if (libre) libre.style.display = (_filtroInf.periodo === 'libre') ? 'inline-flex' : 'none';
+  if (_filtroInf.periodo === 'libre') {
+    // Al abrir el rango a medida se siembra con el mes en curso, para que los
+    // dos campos nunca estén vacíos y la consulta no salga sin sentido.
+    const hoy = new Date();
+    const d = document.getElementById('fi-desde'), h = document.getElementById('fi-hasta');
+    if (d && !d.value) d.value = _iso(new Date(hoy.getFullYear(), hoy.getMonth(), 1));
+    if (h && !h.value) h.value = _iso(hoy);
+  }
+  aplicarFiltroInforme();
+};
+
+window.aplicarFiltroInforme = function () {
+  const rango = _rangoInforme();
+  _filtroInf.desde = rango.desde;
+  _filtroInf.hasta = rango.hasta;
+  _filtroInf.sabor = (document.getElementById('fi-sabor') || {}).value || '';
+  _filtroInf.presentacion = (document.getElementById('fi-pres') || {}).value || '';
+  cargarDashboard();
+};
+
+// El filtro que viaja al servidor. Solo se mandan las claves con valor: sin
+// ellas, el RPC aplica su comportamiento de siempre.
+function _pFiltroInforme() {
+  const p = {};
+  if (_filtroInf.desde) p.desde = _filtroInf.desde;
+  if (_filtroInf.hasta) p.hasta = _filtroInf.hasta;
+  if (_filtroInf.sabor) p.sabor = _filtroInf.sabor;
+  if (_filtroInf.presentacion) p.presentacion = _filtroInf.presentacion;
+  return p;
+}
+
+// Nota bajo la barra: qué periodo se está viendo y contra qué se compara. Sin
+// esto, un porcentaje de crecimiento no se puede interpretar.
+function _pintarNotaFiltro(d) {
+  const el = document.getElementById('fi-nota');
+  if (!el || !d) return;
+  const fmt = (s) => {
+    if (!s) return '';
+    const p = String(s).slice(0, 10).split('-');
+    return p[2] + '/' + p[1];
+  };
+  let txt = 'Del ' + fmt(d.desde) + ' al ' + fmt(d.hasta) + ' (' + d.dias +
+            ' día' + (d.dias === 1 ? '' : 's') + ') · se compara contra ' +
+            fmt(d.prev_desde) + '–' + fmt(d.prev_hasta);
+  if (d.filtro_producto) {
+    txt += ' · filtrado por ' + [d.sabor, d.presentacion].filter(Boolean).join(' / ') +
+           ': el dinero son subtotales de esas líneas, no el total de los pedidos';
+  }
+  txt += ' · «Por entregar» y «Por cobrar» son saldo global, no del periodo';
+  el.textContent = txt;
+}
+
+// Sabores y presentaciones para los desplegables. Sale de `productos`, que es
+// una de las tres tablas que el navegador puede leer directo.
+async function cargarOpcionesFiltro() {
+  if (_catalogoFiltro) return;
+  try {
+    const r = await supabaseCall('GET', 'productos?select=sabor,presentacion&descontinuado=eq.false');
+    if (!Array.isArray(r)) return;
+    _catalogoFiltro = true;
+    const sab = [...new Set(r.map((x) => x.sabor).filter(Boolean))].sort();
+    const pre = [...new Set(r.map((x) => x.presentacion).filter(Boolean))].sort();
+    const selS = document.getElementById('fi-sabor');
+    const selP = document.getElementById('fi-pres');
+    if (selS) sab.forEach((v) => selS.insertAdjacentHTML('beforeend', '<option value="' + v + '">' + v + '</option>'));
+    if (selP) pre.forEach((v) => selP.insertAdjacentHTML('beforeend', '<option value="' + v + '">' + v + '</option>'));
+  } catch (e) {}
+}
+
 // ── DASHBOARD VISUAL (admin) — lee del RPC dashboard_resumen (datos completos) ──
 let _dashData = null;
 
@@ -8706,8 +8853,9 @@ async function cargarDashboard() {
   if (!cont) return;
   cont.innerHTML = '<div style="text-align:center;color:var(--suave);padding:20px 0;"><span class="loader loader-w"></span> Cargando dashboard...</div>';
   try {
-    const res = await supabaseCall('POST', 'rpc/dashboard_resumen', { p_data: { token: tokenVendedor() } });
-    if (res && res.ok && res.data) { _dashData = res.data; pintarDashboard(); }
+    const res = await supabaseCall('POST', 'rpc/dashboard_resumen',
+      { p_data: Object.assign({ token: tokenVendedor() }, _pFiltroInforme()) });
+    if (res && res.ok && res.data) { _dashData = res.data; pintarDashboard(); _pintarNotaFiltro(res.data); }
     else { cont.innerHTML = '<div style="color:var(--rojo);font-size:0.8rem;padding:10px;">No se pudo cargar el dashboard: ' + (res?.error || 'sin respuesta') + '</div>'; }
   } catch(e) {
     cont.innerHTML = '<div style="color:var(--rojo);font-size:0.8rem;padding:10px;">Error: ' + e.message + '</div>';
@@ -9598,6 +9746,12 @@ async function renderResumen() {
         if (_inpMes && !_inpMes.value) _inpMes.value = _mesActual;
         cargarMetricaRegalo(_inpMes?.value || _mesActual);
       }
+    }
+    const _fBar = document.getElementById('filtro-informe');
+    if (_fBar) {
+      const _esAdmF = (typeof esAdmin === 'function' && esAdmin());
+      _fBar.style.display = _esAdmF ? 'block' : 'none';
+      if (_esAdmF) cargarOpcionesFiltro();
     }
     const _embCard = document.getElementById('embudo-card');
     if (_embCard) {
