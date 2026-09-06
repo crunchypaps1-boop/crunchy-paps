@@ -71,6 +71,12 @@ respaldos/
 # Sigue en la carpeta local; solo deja de publicarse.
 CLAUDE.md
 
+# cambios/ — un archivo por cambio (ver PLAN.md §1.5). Mismo criterio que
+# PLAN.md y PROGRESO.md: llevan hallazgos abiertos, decisiones internas y
+# clientes citados por nombre, y el repo es PÚBLICO. Se respaldan al repo
+# privado con `node tools/respaldar-docs.mjs`, que recorre la carpeta entera.
+cambios/
+
 # PLAN.md — plan de trabajo. Enumera hallazgos de seguridad AÚN ABIERTOS
 # (llave de Maps sin restricción, llaves legacy vivas, PIN de 4 dígitos,
 # respaldos sin cifrar). Mismo criterio que PROGRESO.md: el repo es público.

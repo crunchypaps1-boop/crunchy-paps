@@ -11,13 +11,29 @@
 //
 // Correrlo al terminar una sesión de trabajo.
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join, dirname } from 'node:path';
 
 const ORIGEN  = 'C:\\Proyectos\\crunchy-paps';
 const DESTINO = 'C:\\Proyectos\\crunchy-paps-docs';
-const DOCS    = ['.claude/agents/altas-b2b.md', 'PLAN.md', 'PROGRESO.md', 'ACCESOS.md', 'DESPLIEGUE.md', 'CLAUDE.md'];
+const FIJOS   = ['.claude/agents/altas-b2b.md', 'PLAN.md', 'PROGRESO.md', 'ACCESOS.md', 'DESPLIEGUE.md', 'CLAUDE.md'];
+
+// `cambios/` es una CARPETA que crece: un archivo por cambio (PLAN.md §1.5).
+// Se recorre en vez de enumerarse, porque una lista fija habría que acordarse de
+// actualizar en cada cambio nuevo — y lo que hay que acordarse de hacer, no se
+// hace. Si la carpeta no existe todavía, no pasa nada.
+const CAMBIOS = 'cambios';
+const listarCambios = () => {
+  const dir = join(ORIGEN, CAMBIOS);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((n) => n.endsWith('.md'))
+    .sort()
+    .map((n) => `${CAMBIOS}/${n}`);
+};
+
+const DOCS = [...FIJOS, ...listarCambios()];
 
 const soloRevisar = process.argv.includes('--revisar');
 
@@ -48,16 +64,19 @@ let copiados = 0;
 const cambios = [];
 for (const doc of DOCS) {
   const origen = join(ORIGEN, doc);
-  if (!existsSync(origen)) { console.log(`  ${doc.padEnd(30)} no está en el origen, se omite`); continue; }
+  if (!existsSync(origen)) { console.log(`  ${doc.padEnd(42)} no está en el origen, se omite`); continue; }
   const nuevo = readFileSync(origen);
   const destino = join(DESTINO, doc);
   const viejo = existsSync(destino) ? readFileSync(destino) : null;
-  if (viejo && viejo.equals(nuevo)) { console.log(`  ${doc.padEnd(30)} sin cambios`); continue; }
+  if (viejo && viejo.equals(nuevo)) { console.log(`  ${doc.padEnd(42)} sin cambios`); continue; }
   const lineas = nuevo.toString('utf8').split('\n').length;
   const antes  = viejo ? viejo.toString('utf8').split('\n').length : 0;
-  const delta  = viejo ? (lineas - antes >= 0 ? '+' : '') + (lineas - antes) : 'nuevo';
+  // "nuevo líneas" se leía mal en la salida; un archivo que no existía antes
+  // dice cuántas trae, no cuántas cambió.
+  const delta  = viejo ? (lineas - antes >= 0 ? '+' : '') + (lineas - antes) + ' líneas'
+                       : `nuevo (${lineas} líneas)`;
   cambios.push(`${doc} (${delta} líneas)`);
-  console.log(`  ${doc.padEnd(30)} ${delta} líneas`);
+  console.log(`  ${doc.padEnd(42)} ${delta}`);
   if (!soloRevisar) { mkdirSync(dirname(destino), { recursive: true }); writeFileSync(destino, nuevo); copiados++; }
 }
 
