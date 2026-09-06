@@ -1131,6 +1131,111 @@ agregar('X. Embudo', 'un dias absurdo se recorta al tope de 180',
 agregar('X. Embudo', 'eventos_navegacion sigue cerrada pese al RPC nuevo',
   () => pedir('GET', 'eventos_navegacion?select=*&limit=1'), cerrado);
 
+// ── Y. El precio lo decide el SERVIDOR, no el navegador ────────────────────
+// El 5 sep 2026 se demostró que con la llave pública, sin sesión, se creaba un
+// pedido de $1 por mercancía de $1.000 — y Stripe lo cobraba (piso de $10).
+// Estos casos son la prueba viva de que eso ya no pasa. Si alguno se pone en
+// rojo, el camino del dinero volvió a estar abierto.
+//
+// Se cotiza contra el catálogo REAL de la base, no contra cifras escritas a
+// mano: así la prueba sigue valiendo cuando cambien los precios.
+
+let _catCache = null;
+async function catalogoPrueba() {
+  if (_catCache) return _catCache;
+  const r = await pedir('GET',
+    'productos?select=id,sabor,presentacion,precio_consumidor,precio_tienda,precio_granel_kg&limit=5');
+  _catCache = Array.isArray(r.datos) ? r.datos : [];
+  return _catCache;
+}
+const lineaDe = (p, extra) => Object.assign({
+  idProducto: String(p.id), sabor: p.sabor, presentacion: p.presentacion,
+  tipoVenta: 'Por Pieza', cantidad: 10, gramos: 0, precio: 0, subtotal: 0,
+}, extra || {});
+const pedidoDe = (d) => pedir('POST', 'rpc/crear_pedido',
+  { p_data: Object.assign({ nombre: 'PRUEBA rls', telefono: '5599000099' }, d) });
+
+agregar('Y. El precio lo decide el servidor', 'sin sesión no se puede crear un pedido',
+  async () => {
+    const cat = await catalogoPrueba();
+    if (!cat.length) return { estado: 0, datos: 'sin catálogo' };
+    return pedidoDe({ total: 1, productos: [lineaDe(cat[0])],
+                      idempotencyKey: 'rls-sin-ses-' + Date.now() });
+  },
+  (r) => r.datos?.ok === false && r.datos.error === 'sesion_requerida',
+  true);
+
+// El caso central: el ataque que funcionaba, con la identidad ya resuelta para
+// que lo único que pueda pararlo sea el recálculo.
+agregar('Y. El precio lo decide el servidor', 'un total manipulado se rechaza con el correcto',
+  async () => {
+    const t = await entrar('5500000001');
+    const cat = await catalogoPrueba();
+    if (!t || !cat.length) return { estado: 0, datos: 'sin token o catálogo' };
+    const p = cat[0];
+    const r = await pedidoDe({ token: t, tipoCliente: 'consumidor',
+      total: 1, descuento: 999, productos: [lineaDe(p)],
+      idempotencyKey: 'rls-atk-' + Date.now() });
+    return { estado: r.estado, datos: { r: r.datos, esperado: 10 * Number(p.precio_consumidor) } };
+  },
+  (r) => r.datos?.r?.ok === false &&
+         r.datos.r.error === 'precio_cambiado' &&
+         Number(r.datos.r.totalCorrecto) === r.datos.esperado,
+  true);
+
+agregar('Y. El precio lo decide el servidor', 'cada nivel cobra SU columna de precio',
+  async () => {
+    const t = await entrar('5500000001');
+    const cat = await catalogoPrueba();
+    if (!t || !cat.length) return { estado: 0, datos: 'sin token o catálogo' };
+    const p = cat[0];
+    const cons = await pedidoDe({ token: t, tipoCliente: 'consumidor',
+      total: 10 * Number(p.precio_consumidor), productos: [lineaDe(p)],
+      idempotencyKey: 'rls-n1-' + Date.now() });
+    const tie = await pedidoDe({ token: t, tipoCliente: 'tienda',
+      total: 10 * Number(p.precio_tienda), productos: [lineaDe(p)],
+      idempotencyKey: 'rls-n2-' + Date.now() });
+    return { estado: 200, datos: {
+      cons: cons.datos?.total, nivelC: cons.datos?.nivelPrecio,
+      tie: tie.datos?.total, nivelT: tie.datos?.nivelPrecio,
+      espC: 10 * Number(p.precio_consumidor), espT: 10 * Number(p.precio_tienda) } };
+  },
+  // Y los dos niveles tienen que dar cifras DISTINTAS: si el seed igualara los
+  // precios, el caso pasaría sin probar nada.
+  (r) => Number(r.datos?.cons) === r.datos?.espC && r.datos?.nivelC === 'consumidor' &&
+         Number(r.datos?.tie) === r.datos?.espT && r.datos?.nivelT === 'tienda' &&
+         r.datos.espC !== r.datos.espT,
+  true);
+
+agregar('Y. El precio lo decide el servidor', 'un producto que no existe tumba el pedido',
+  async () => {
+    const t = await entrar('5500000001');
+    if (!t) return { estado: 0, datos: 'sin token' };
+    return pedidoDe({ token: t, tipoCliente: 'consumidor', total: 100,
+      productos: [{ idProducto: '', sabor: 'Sabor Que No Existe',
+                    presentacion: 'Bolsa 50g', tipoVenta: 'Por Pieza', cantidad: 1 }],
+      idempotencyKey: 'rls-noprod-' + Date.now() });
+  },
+  (r) => r.datos?.ok === false && r.datos.error === 'producto_no_encontrado',
+  true);
+
+agregar('Y. El precio lo decide el servidor', 'el granel se cobra por peso, no por pieza',
+  async () => {
+    const t = await entrar('5500000001');
+    const cat = await catalogoPrueba();
+    if (!t || !cat.length) return { estado: 0, datos: 'sin token o catálogo' };
+    const g = cat.find((c) => Number(c.precio_granel_kg) > 0);
+    if (!g) return { estado: 0, datos: 'el catálogo no tiene granel' };
+    const esperado = Math.round(500 / 1000 * Number(g.precio_granel_kg) * 100) / 100;
+    const r = await pedidoDe({ token: t, tipoCliente: 'consumidor', total: esperado,
+      productos: [{ idProducto: String(g.id), sabor: g.sabor, presentacion: g.presentacion,
+                    tipoVenta: 'A granel', cantidad: 0, gramos: 500 }],
+      idempotencyKey: 'rls-granel-' + Date.now() });
+    return { estado: 200, datos: { total: r.datos?.total, esperado, ok: r.datos?.ok } };
+  },
+  (r) => r.datos?.ok === true && Number(r.datos.total) === r.datos.esperado,
+  true);
+
 // ── Ejecución ──────────────────────────────────────────────────────────────
 
 console.log(`\nProbando RLS contra ${URL_BASE}${SOLO_LECTURA ? '   [solo lectura]' : ''}\n`);

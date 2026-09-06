@@ -6928,6 +6928,7 @@ window.confirmarPedido = async function() {
       subtotal: subtotalCarrito,
       descuento: descuentoCupon,
       cuponCodigo: _cuponEnCarrito?.codigo || '',
+      tokenCliente: (typeof tokenCliente === 'function' ? tokenCliente() : ''),
       // v2.10: notas enriquecidas con método de entrega (solo consumidor)
       notas: (() => {
         let n = notas || '';
@@ -6973,6 +6974,38 @@ window.confirmarPedido = async function() {
     return;
   }
 
+  // ── El servidor puede RECHAZAR el pedido ──────────────────────────────
+  // Desde la parte 2 lo hace de verdad: precio que no cuadra, sesión que falta,
+  // producto que ya no existe. Antes de este guard el código SEGUÍA de largo con
+  // el folio 'WEB-?????' y le enseñaba al cliente una pantalla de gracias por un
+  // pedido que no existía. Casi nunca saltaba —el RPC casi nunca decía que no—,
+  // y por eso nadie lo vio.
+  if (!rp || !rp.ok) {
+    _enviandoPedido = false; clearTimeout(safetyTimer);
+    btn.disabled = false; btn.textContent = '✅ Confirmar pedido';
+    // NO se limpia la llave de idempotencia: el pedido no se creó, y si el
+    // cliente reintenta debe reusarla para no duplicar si la primera sí entró.
+    var _err = (rp && rp.error) || 'desconocido';
+    var _msg = (rp && rp.mensaje) || '';
+
+    if (_err === 'precio_cambiado') {
+      alert('⚠️ El precio cambió mientras armabas tu pedido.\n\n' +
+            'Tu total: $' + Number(rp.totalEnviado || 0).toLocaleString('es-MX') + '\n' +
+            'Total correcto: $' + Number(rp.totalCorrecto || 0).toLocaleString('es-MX') + '\n\n' +
+            'Revisa tu carrito y confirma de nuevo.');
+    } else if (_err === 'sesion_requerida') {
+      alert('📱 Para completar tu pedido necesitamos verificar tu teléfono.');
+      try { ir('s-otp'); } catch (_e) {}
+    } else if (_err === 'producto_no_encontrado' || _err === 'granel_sin_precio') {
+      alert('⚠️ ' + (_msg || 'Uno de los productos ya no está disponible.') +
+            '\n\nQuítalo del carrito e intenta de nuevo.');
+    } else {
+      alert('No se pudo registrar el pedido: ' + (_msg || _err) +
+            '\n\nIntenta de nuevo. Si el pedido sí se registró, no se duplicará.');
+    }
+    return;
+  }
+
   // Limpiar idempotency key sólo si la respuesta fue OK (incluso si fue duplicado detectado)
   if (rp && rp.ok) {
     try { sessionStorage.removeItem('cp_idem_pedido_actual'); } catch(e) {}
@@ -6997,7 +7030,8 @@ window.confirmarPedido = async function() {
   _enviandoPedido = false; clearTimeout(safetyTimer);
 
   // Construir mensaje WhatsApp
-  const consec     = rp.ok ? rp.consecutivo : 'WEB-?????';
+  // Llegar aquí implica rp.ok: el guard de arriba corta cualquier otro caso.
+  const consec     = rp.consecutivo;
 
   // Sampling/Regalo a persona NUEVA → registrar PROSPECTO enlazado (no bloquea el pedido)
   if (rp && rp.ok && !rp.duplicado && esPedidoInterno && !clienteActual?.id) {
