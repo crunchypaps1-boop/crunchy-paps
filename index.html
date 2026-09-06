@@ -1126,10 +1126,13 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
     <div style="max-width:360px;width:100%;display:flex;flex-direction:column;align-items:center;gap:18px;text-align:center;">
       <div style="font-size:3rem;">🔐</div>
       <div style="font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--amarillo);letter-spacing:2px;">ACCESO VENDEDOR</div>
-      <div style="font-size:0.85rem;font-weight:700;color:var(--suave);" id="pin-nombre-label">Ingresa tu PIN de 4 dígitos</div>
+      <div style="font-size:0.85rem;font-weight:700;color:var(--suave);" id="pin-nombre-label">Ingresa tu PIN</div>
 
-      <!-- Dígitos PIN -->
-      <div style="display:flex;gap:12px;justify-content:center;">
+      <!-- Dígitos PIN — SEIS casillas. Antes eran cuatro, y como el mínimo al
+           CAMBIAR el PIN es de 6 (migración 20260902010000), quien cambiara el
+           suyo se quedaba fuera: la app fijaba un PIN que luego no podía
+           recibir. Los PIN de 4 siguen sirviendo; se envían con «Entrar». -->
+      <div style="display:flex;gap:8px;justify-content:center;">
         <input class="otp-d" type="tel" maxlength="1" inputmode="numeric" id="p0"
           oninput="focoPIN(this,0)" onkeydown="retrocesoPIN(event,0)">
         <input class="otp-d" type="tel" maxlength="1" inputmode="numeric" id="p1"
@@ -1138,6 +1141,13 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
           oninput="focoPIN(this,2)" onkeydown="retrocesoPIN(event,2)">
         <input class="otp-d" type="tel" maxlength="1" inputmode="numeric" id="p3"
           oninput="focoPIN(this,3)" onkeydown="retrocesoPIN(event,3)">
+        <input class="otp-d" type="tel" maxlength="1" inputmode="numeric" id="p4"
+          oninput="focoPIN(this,4)" onkeydown="retrocesoPIN(event,4)">
+        <input class="otp-d" type="tel" maxlength="1" inputmode="numeric" id="p5"
+          oninput="focoPIN(this,5)" onkeydown="retrocesoPIN(event,5)">
+      </div>
+      <div style="font-size:0.72rem;color:var(--suave);">
+        Si tu PIN es de 4 dígitos, tecléalos y pulsa <b>Entrar</b>.
       </div>
 
       <button class="btn-primary" id="btn-pin" onclick="verificarPIN()">Entrar</button>
@@ -1576,20 +1586,15 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
   <div style="padding:0 16px 16px;">
     <div style="background:var(--gris);border-radius:14px;padding:16px;">
       <div style="font-family:'Bebas Neue',sans-serif;font-size:1.1rem;color:var(--amarillo);letter-spacing:1px;margin-bottom:4px;">💸 CANJEAR PUNTOS</div>
-      <div style="font-size:0.78rem;font-weight:700;color:var(--suave);margin-bottom:14px;">100 puntos = $10 de descuento en tu próximo pedido</div>
-      <div style="display:flex;gap:10px;align-items:center;">
-        <input type="number" id="canje-input" min="100" max="500" step="100"
-          placeholder="100" style="background:var(--gris2);border:2px solid var(--gris3);border-radius:10px;padding:10px 14px;color:var(--blanco);font-family:'Inter',sans-serif;font-weight:700;font-size:0.9rem;outline:none;width:100%;border-color:var(--gris3);"
-          oninput="calcCanje(this.value)" onfocus="this.style.borderColor='var(--amarillo)'" onblur="this.style.borderColor='var(--gris3)'">
-        <div style="flex-shrink:0;text-align:center;">
-          <div style="font-family:'Bebas Neue',sans-serif;font-size:1.4rem;color:var(--amarillo);" id="canje-resultado">$0</div>
-          <div style="font-size:0.65rem;font-weight:700;color:#555;">DESCUENTO</div>
-        </div>
+      <div style="font-size:0.78rem;font-weight:700;color:var(--suave);margin-bottom:14px;">100 puntos = $10 de descuento</div>
+      <div style="background:var(--gris2);border-radius:10px;padding:12px;text-align:center;">
+        <div style="font-family:'Bebas Neue',sans-serif;font-size:2rem;color:var(--amarillo);line-height:1;"><span id="canje-disponibles">0</span></div>
+        <div style="font-size:0.68rem;font-weight:800;color:var(--suave);letter-spacing:1px;">PUNTOS ACUMULADOS</div>
       </div>
-      <button onclick="aplicarCanje()" style="margin-top:12px;background:var(--amarillo);border:none;border-radius:12px;padding:13px;width:100%;font-family:'Inter',sans-serif;font-weight:900;font-size:0.9rem;color:var(--negro);cursor:pointer;">
-        Aplicar descuento a mi siguiente pedido
-      </button>
-      <div style="font-size:0.72rem;font-weight:700;color:var(--suave);text-align:center;margin-top:8px;">Mínimo 100 puntos · Puntos disponibles: <span id="canje-disponibles">0</span></div>
+      <div style="font-size:0.74rem;font-weight:700;color:var(--suave);text-align:center;margin-top:10px;line-height:1.45;">
+        🔒 El canje estará disponible muy pronto.<br>
+        <span style="color:#777;font-weight:600;">Tus puntos se siguen acumulando y no caducan.</span>
+      </div>
     </div>
   </div>
 </div>
@@ -7500,11 +7505,28 @@ async function cargarCatalogoSupabase() {
 // ══════════════════════════════════
 // LOGIN CON PIN (vendedores)
 // ══════════════════════════════════
+// El PIN tiene longitud VARIABLE: 4 para los que nunca lo han cambiado, 6 o más
+// para los nuevos. Por eso el envío automático solo ocurre al llenar las seis
+// casillas; con 4 dígitos se pulsa «Entrar». Enviar al llegar a 4, como hacía
+// antes, haría imposible teclear un PIN de 6.
+const PIN_CASILLAS = 6;
+
+function _leerPIN() {
+  let pin = '';
+  for (let i = 0; i < PIN_CASILLAS; i++) {
+    const el = document.getElementById('p' + i);
+    if (el) pin += (el.value || '');
+  }
+  return pin;
+}
+
 window.focoPIN = function(inp, idx) {
   inp.value = inp.value.replace(/\D/g,'');
-  if (inp.value && idx < 3) document.getElementById('p' + (idx+1)).focus();
-  const pin = [0,1,2,3].map(i => document.getElementById('p'+i).value).join('');
-  if (pin.length === 4) verificarPIN();
+  if (inp.value && idx < PIN_CASILLAS - 1) {
+    const sig = document.getElementById('p' + (idx+1));
+    if (sig) sig.focus();
+  }
+  if (_leerPIN().length === PIN_CASILLAS) verificarPIN();
 };
 
 window.retrocesoPIN = function(e, idx) {
@@ -7519,10 +7541,10 @@ window.retrocesoPIN = function(e, idx) {
 };
 
 window.verificarPIN = async function() {
-  const pin = [0,1,2,3].map(i => document.getElementById('p'+i).value).join('');
+  const pin = _leerPIN();
   const msg = document.getElementById('msg-pin');
   const btn = document.getElementById('btn-pin');
-  if (pin.length < 4) { msg.className='msg err'; msg.textContent='Ingresa los 4 dígitos'; return; }
+  if (pin.length < 4) { msg.className='msg err'; msg.textContent='El PIN tiene al menos 4 dígitos'; return; }
 
   btn.disabled = true; btn.innerHTML = '<span class="loader"></span> Verificando...';
   msg.textContent = '';
@@ -8156,14 +8178,21 @@ window.calcCanje = function(val) {
   document.getElementById('canje-resultado').textContent = '$' + descuento;
 };
 
+// DESARMADA el 5 sep 2026. Lo que hacía antes: calculaba un descuento, lo
+// guardaba en `window._canjeActivo` y le prometía al cliente que se aplicaría
+// en su próximo pedido. `_canjeActivo` no se leía en NINGUNA otra línea del
+// archivo, así que el descuento no llegaba nunca y los puntos tampoco se
+// descontaban — no había una sola llamada al servidor.
+//
+// Se conserva la función, sin efecto, porque puede quedar algún `onclick` en
+// una versión cacheada de la PWA: mejor un aviso honesto que un ReferenceError.
+//
+// La redención de verdad tiene que decidirse en Postgres —RPC con tope y
+// asiento en `lealtad_movimientos`—, no en el navegador: la comprobación vieja
+// era `pts > puntos` contra una variable local, y cualquiera con la consola
+// abierta se habría regalado el descuento.
 window.aplicarCanje = function() {
-  const pts = parseInt(document.getElementById('canje-input').value) || 0;
-  if (pts < 100) { alert('Mínimo 100 puntos para canjear'); return; }
-  if (pts > puntos) { alert('No tienes suficientes puntos disponibles'); return; }
-  const descuento = Math.floor(pts / 100) * 10;
-  // Guardar descuento por canje para aplicar en el próximo pedido
-  window._canjeActivo = { puntos: pts, descuento };
-  alert(`✅ ¡Listo! Se aplicarán $${descuento} de descuento en tu próximo pedido.`);
+  alert('El canje de puntos estará disponible muy pronto. Tus puntos se siguen acumulando y no caducan.');
 };
 
 
