@@ -2954,6 +2954,17 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
       </div>
       <div id="regalos-cont"><div style="color:var(--suave);font-size:0.8rem;">Cargando métrica…</div></div>
     </div>
+    <div id="embudo-card" style="display:none;background:var(--gris);border-radius:14px;padding:14px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap;">
+        <span style="font-family:'Bebas Neue',sans-serif;font-size:1rem;color:var(--amarillo);letter-spacing:1px;">🫗 ¿DÓNDE SE CAE LA GENTE?</span>
+        <select id="embudo-dias" onchange="cargarEmbudo(this.value)" style="background:var(--gris2);border:1px solid var(--gris3);color:var(--blanco);border-radius:8px;padding:6px 10px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+          <option value="7">7 días</option>
+          <option value="30" selected>30 días</option>
+          <option value="90">90 días</option>
+        </select>
+      </div>
+      <div id="embudo-cont"><div style="color:var(--suave);font-size:0.8rem;">Cargando embudo…</div></div>
+    </div>
     <input id="resumen-buscar" oninput="filtrarResumen()" placeholder="🔎 Buscar pedido o cliente…"
       style="width:100%;background:var(--gris2);border:1px solid var(--gris3);border-radius:10px;padding:10px 12px;color:var(--blanco);font-size:0.85rem;margin-bottom:10px;">
     <div id="resumen-stats" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;"></div>
@@ -3672,6 +3683,12 @@ function track(nombre, params) {
     // la atribución paga.
     var _atr = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('last') : {};
     var _params = params || {};
+    // Marca de canal. Es una sola app: un vendedor en el mostrador pasa por el
+    // mismo catálogo y el mismo checkout, así que sin esto sus sesiones entran
+    // al embudo como si fueran de un cliente — y no es ruido neutro: abre el
+    // checkout para cerrar una venta YA hecha, así que convierte casi al 100 %
+    // y esconde la caída real. Va en `params` (jsonb): sin columnas nuevas.
+    if (esVendedor) _params = Object.assign({}, _params, { v: 1 });
     if (nombre === 'purchase') {
       var _pri = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('first') : {};
       if (_pri.utm_source || _pri.utm_campaign) {
@@ -9035,6 +9052,87 @@ window.guardarCopyRecordatorio = async function(btn) {
 // ══════════════════════════════════
 // KÁRDEX DE LOTE — libro contable: cada pedido = un renglón con saldo corrido
 // ══════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// Embudo de comportamiento (PLAN.md §7.6, pregunta 1)
+// ══════════════════════════════════════════════════════════════════
+// Dos embudos: consumidor y personal. El de personal no es ruido a tirar —
+// si el equipo se atasca en un paso, es fricción de la herramienta que usan
+// todos los días, y hoy eso no lo ve nadie.
+//
+// El cálculo vive en Postgres (embudo_resumen): aquí solo se pinta. Cada
+// sesión aporta su escalón MÁS LEJANO, así que los escalones nunca crecen.
+window.cargarEmbudo = async function(dias) {
+  const cont = document.getElementById('embudo-cont');
+  if (!cont) return;
+  cont.innerHTML = '<div style="color:var(--suave);font-size:0.8rem;">Cargando embudo…</div>';
+  try {
+    const r = await supabaseCall('POST', 'rpc/embudo_resumen',
+      { p_data: { dias: Number(dias) || 30 } });
+    if (!r || !r.ok) {
+      cont.innerHTML = '<div style="color:var(--rojo);font-size:0.8rem;">' +
+        ((r && r.error) || 'No se pudo cargar') + '</div>';
+      return;
+    }
+    const canales = r.canales || [];
+    if (!canales.length) {
+      cont.innerHTML = '<div style="color:var(--suave);font-size:0.8rem;">Sin recorridos en el periodo.</div>';
+      return;
+    }
+    const ETIQ = { consumidor: '🛒 Consumidor', personal: '🧑‍🍳 Personal (mostrador)' };
+    let html = '';
+    canales.forEach(function (c) {
+      const pasos = c.pasos || [];
+      const base = (pasos[0] && pasos[0].sesiones) || 0;
+      // La caída MAYOR es el punto donde arreglar la app rinde más: se resalta,
+      // porque es la única cifra de toda la tarjeta sobre la que se actúa.
+      let peor = -1, peorIdx = -1;
+      pasos.forEach(function (p, i) {
+        if (i === 0) return;
+        const caida = (pasos[i - 1].sesiones || 0) - (p.sesiones || 0);
+        if (caida > peor) { peor = caida; peorIdx = i; }
+      });
+      html += '<div style="margin-bottom:14px;">' +
+        '<div style="font-weight:800;font-size:0.8rem;color:var(--blanco);margin-bottom:6px;">' +
+        (ETIQ[c.canal] || c.canal) + ' · <span style="color:var(--suave);font-weight:600;">' +
+        base + ' sesion' + (base === 1 ? '' : 'es') + '</span></div>';
+      pasos.forEach(function (p, i) {
+        const n = p.sesiones || 0;
+        const pct = base ? Math.round(n * 100 / base) : 0;
+        const prev = i ? (pasos[i - 1].sesiones || 0) : n;
+        const caida = prev - n;
+        const pctCaida = prev ? Math.round(caida * 100 / prev) : 0;
+        const esPeor = (i === peorIdx && caida > 0);
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;font-size:0.75rem;">' +
+          '<div style="flex:0 0 118px;color:var(--suave);">' + p.nombre + '</div>' +
+          '<div style="flex:1;background:var(--gris2);border-radius:4px;height:16px;overflow:hidden;min-width:40px;">' +
+            '<div style="width:' + pct + '%;height:100%;background:' +
+            (esPeor ? 'var(--rojo)' : 'var(--amarillo)') + ';"></div>' +
+          '</div>' +
+          '<div style="flex:0 0 74px;text-align:right;color:var(--blanco);font-weight:700;">' +
+            n + ' <span style="color:var(--suave);font-weight:600;">(' + pct + '%)</span></div>' +
+          '<div style="flex:0 0 56px;text-align:right;font-weight:700;color:' +
+            (esPeor ? 'var(--rojo)' : 'var(--suave)') + ';">' +
+            (i === 0 ? '' : (caida > 0 ? '−' + pctCaida + '%' : '—')) + '</div>' +
+        '</div>';
+      });
+      if (peorIdx > 0 && peor > 0) {
+        html += '<div style="font-size:0.72rem;color:var(--rojo);margin-top:4px;">' +
+          'Mayor caída: ' + pasos[peorIdx - 1].nombre + ' → ' + pasos[peorIdx].nombre +
+          ' (' + peor + ' sesion' + (peor === 1 ? '' : 'es') + ')</div>';
+      }
+      html += '</div>';
+    });
+    // El corte importa: los eventos anteriores al 5 sep 2026 no llevan marca de
+    // canal, así que las sesiones de personal de antes salen como consumidor.
+    html += '<div style="font-size:0.68rem;color:var(--suave);border-top:1px solid var(--gris3);padding-top:6px;">' +
+      'Una sesión cuenta en el escalón más lejano al que llegó. Antes del 5 sep 2026 ' +
+      'los eventos no distinguían al personal, así que esas sesiones aparecen como consumidor.</div>';
+    cont.innerHTML = html;
+  } catch (e) {
+    cont.innerHTML = '<div style="color:var(--rojo);font-size:0.8rem;">Error: ' + e.message + '</div>';
+  }
+};
+
 window.cargarMetricaRegalo = async function(yyyymm) {
   const cont = document.getElementById('regalos-cont');
   if (!cont) return;
@@ -9500,6 +9598,12 @@ async function renderResumen() {
         if (_inpMes && !_inpMes.value) _inpMes.value = _mesActual;
         cargarMetricaRegalo(_inpMes?.value || _mesActual);
       }
+    }
+    const _embCard = document.getElementById('embudo-card');
+    if (_embCard) {
+      const _esAdmE = (typeof esAdmin === 'function' && esAdmin());
+      _embCard.style.display = _esAdmE ? 'block' : 'none';
+      if (_esAdmE) cargarEmbudo(document.getElementById('embudo-dias')?.value || 30);
     }
     pintarResumen();
   } catch(e) {

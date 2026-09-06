@@ -66,6 +66,7 @@ const andamio = [
   'const perfPush = () => {};',
   'const tokenVendedor = () => "";',
   'let clienteActual = null;',
+  'let esVendedor = false;',
   'const location = { pathname: "/prueba", search: "" };',
   'const sessionStorage = { getItem: (k) => ({ cp_sid: "prueba-cola", utm_source: "ig" })[k] || "" };',
   'const document = {',
@@ -83,6 +84,7 @@ const andamio = [
 
 const cola = [
   'export { track, _evCola };',
+  'export function setVendedor(v) { esVendedor = v; }',
   'export const ocultarPestana = () => {',
   '  document.visibilityState = "hidden";',
   '  globalThis.__oyenteVisibilidad();',
@@ -258,6 +260,26 @@ await esperar(1, 9000);
   comprobar('los eventos que no son purchase NO cargan la primera',
     vista?.params?.utm_first_campaign === undefined, 'limpio');
 }
+
+// ── La marca de canal, que es lo que hace posible separar los dos embudos ──
+reiniciar();
+mod.setVendedor(true);
+mod.track('view_catalog', {});
+mod.track('purchase', { valor: 1 });
+await esperar(1, 9000);
+{
+  const ev = respuestas[0]?.enviados || [];
+  comprobar('sesión de personal: todos los eventos van marcados',
+    ev.length === 2 && ev.every((e) => e.params && e.params.v === 1),
+    'marcados=' + ev.filter((e) => e.params?.v === 1).length + '/' + ev.length);
+}
+
+reiniciar();
+mod.setVendedor(false);
+mod.track('view_catalog', {});
+await esperar(1, 9000);
+comprobar('sesión de consumidor: sin marca',
+  (respuestas[0]?.enviados || []).every((e) => e.params?.v === undefined), 'limpio');
 
 let fallos = 0;
 for (const p of pruebas) {

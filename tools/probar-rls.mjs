@@ -1039,6 +1039,93 @@ agregar('W. Eventos en lote', 'el RPC existe y responde [sonda inocua]',
 agregar('W. Eventos en lote', 'eventos_navegacion sigue cerrada a lectura',
   () => pedir('GET', 'eventos_navegacion?select=*&limit=1'), cerrado);
 
+// ── X. Embudo de comportamiento (PLAN.md §7.6) ─────────────────────────────
+// Se mide por DELTAS: la tabla de eventos ya trae filas de otras pruebas y de
+// la propia app, así que afirmar cifras absolutas sería atarse a un estado que
+// cambia solo. Lo que se comprueba es cuánto MUEVE cada recorrido inyectado.
+
+const pasosDe = (r, canal) => {
+  const c = (r.datos?.canales || []).find((x) => x.canal === canal);
+  return c ? c.pasos.map((p) => p.sesiones) : [0, 0, 0, 0, 0, 0];
+};
+const embudo = (t, dias) =>
+  pedir('POST', 'rpc/embudo_resumen', { p_data: { token: t, dias: dias || 30 } });
+
+agregar('X. Embudo', 'sin token no devuelve una sola cifra',
+  () => pedir('POST', 'rpc/embudo_resumen', { p_data: { dias: 30 } }),
+  (r) => r.estado === 200 && r.datos?.ok === false && !r.datos.canales);
+
+agregar('X. Embudo', 'un vendedor SIN la sección resumen tampoco',
+  async () => {
+    const t = await entrar('5500000003');          // Vendedor: no tiene la sección resumen
+    if (!t) return { estado: 0, datos: 'sin token' };
+    return embudo(t);
+  },
+  (r) => r.datos?.ok === false,
+  true);
+
+// El caso de fondo: tres recorridos plantados mueven los escalones EXACTAMENTE
+// lo que deben, y ni uno más.
+agregar('X. Embudo', 'los escalones se mueven exactamente lo inyectado',
+  async () => {
+    const t = await entrar('5500000001');          // Admin: sí tiene la sección resumen
+    if (!t) return { estado: 0, datos: 'sin token' };
+    const antes = await embudo(t);
+    const marca = Date.now();
+    const ev = (sid, nombre, v) =>
+      ({ sessionId: sid, evento: nombre, msAtras: 0, params: v ? { v: 1 } : {} });
+    const A = 'rls-emb-A-' + marca, B = 'rls-emb-B-' + marca, C = 'rls-emb-C-' + marca;
+    await pedir('POST', 'rpc/registrar_eventos', { p_data: { eventos: [
+      // A se cae en el carrito; B compra; C es personal y compra.
+      ...['view_catalog', 'view_item', 'add_to_cart'].map((n) => ev(A, n)),
+      ...['view_catalog', 'view_item', 'add_to_cart', 'begin_checkout',
+          'select_payment', 'purchase'].map((n) => ev(B, n)),
+      ...['view_catalog', 'view_item', 'add_to_cart', 'begin_checkout',
+          'select_payment', 'purchase'].map((n) => ev(C, n, true)),
+      // Fuera del embudo: no debe crear sesión ni mover ningún escalón.
+      ev(A, 'banner_click'),
+    ] } });
+    const desp = await embudo(t);
+    const dCons = pasosDe(desp, 'consumidor').map((n, i) => n - pasosDe(antes, 'consumidor')[i]);
+    const dPers = pasosDe(desp, 'personal').map((n, i) => n - pasosDe(antes, 'personal')[i]);
+    return { estado: 200, datos: { dCons, dPers, ok: desp.datos?.ok } };
+  },
+  // A y B llegan a los 3 primeros; solo B sigue hasta el final. C va aparte.
+  (r) => r.datos?.ok === true &&
+         String(r.datos.dCons) === String([2, 2, 2, 1, 1, 1]) &&
+         String(r.datos.dPers) === String([1, 1, 1, 1, 1, 1]),
+  true);
+
+// Un embudo cuyos escalones crecen no es un embudo. Se comprueba la propiedad,
+// no una cifra: es lo que sostiene que "sobrevive el 40 %" signifique algo.
+agregar('X. Embudo', 'los escalones nunca crecen (monotonía)',
+  async () => {
+    const t = await entrar('5500000001');
+    if (!t) return { estado: 0, datos: 'sin token' };
+    const r = await embudo(t, 90);
+    const malos = (r.datos?.canales || []).filter((c) => {
+      const p = c.pasos.map((x) => x.sesiones);
+      return p.some((n, i) => i > 0 && n > p[i - 1]);
+    });
+    return { estado: 200, datos: { malos: malos.length, canales: (r.datos?.canales || []).length } };
+  },
+  (r) => r.datos?.malos === 0 && r.datos?.canales > 0,
+  true);
+
+agregar('X. Embudo', 'un dias absurdo se recorta al tope de 180',
+  async () => {
+    const t = await entrar('5500000001');
+    if (!t) return { estado: 0, datos: 'sin token' };
+    const alto = await embudo(t, 99999);
+    const bajo = await embudo(t, -5);
+    return { estado: 200, datos: { alto: alto.datos?.dias, bajo: bajo.datos?.dias } };
+  },
+  (r) => r.datos?.alto === 180 && r.datos?.bajo === 1,
+  true);
+
+agregar('X. Embudo', 'eventos_navegacion sigue cerrada pese al RPC nuevo',
+  () => pedir('GET', 'eventos_navegacion?select=*&limit=1'), cerrado);
+
 // ── Ejecución ──────────────────────────────────────────────────────────────
 
 console.log(`\nProbando RLS contra ${URL_BASE}${SOLO_LECTURA ? '   [solo lectura]' : ''}\n`);
