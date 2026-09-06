@@ -1034,9 +1034,29 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
     <!-- Patrón decorativo -->
     <div style="width:40px;height:3px;background:var(--amarillo);border-radius:2px;margin-bottom:36px;"></div>
 
-    <!-- Entrada directa con teléfono -->
+    <!-- Salida principal: VER EL CATÁLOGO, sin pedir nada.
+         Antes esta pantalla solo ofrecía un campo de teléfono: un desconocido
+         tenía que entregar su número antes de ver una foto o un precio. Era la
+         fuga más cara de la app, y además invisible para el embudo, porque
+         view_catalog solo se dispara después de verificar. -->
+    <div style="width:100%;max-width:360px;margin-bottom:22px;">
+      <button onclick="usarComoConsumidor()" style="background:var(--amarillo);border:none;border-radius:12px;padding:16px;width:100%;font-family:'Inter',sans-serif;font-weight:800;font-size:1.05rem;color:var(--negro);cursor:pointer;">
+        🍟 Ver el catálogo
+      </button>
+      <div style="font-size:0.74rem;font-weight:600;color:rgba(255,255,255,0.42);margin-top:8px;">
+        Mira sabores y precios sin registrarte. Te pediremos tu número solo al pagar.
+      </div>
+    </div>
+
+    <div style="width:100%;max-width:360px;display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+      <div style="flex:1;height:1px;background:rgba(255,255,255,0.12);"></div>
+      <div style="font-size:0.68rem;font-weight:700;color:rgba(255,255,255,0.3);letter-spacing:1px;">O YA SOY CLIENTE</div>
+      <div style="flex:1;height:1px;background:rgba(255,255,255,0.12);"></div>
+    </div>
+
+    <!-- Entrada con teléfono: clientes que vuelven, y el personal -->
     <div style="width:100%;max-width:360px;">
-      <div style="font-size:0.78rem;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Ingresa tu número para continuar</div>
+      <div style="font-size:0.78rem;font-weight:700;color:rgba(255,255,255,0.5);text-transform:uppercase;letter-spacing:1px;margin-bottom:12px;">Entra con tu número</div>
       <div style="display:flex;gap:8px;margin-bottom:12px;">
         <div style="background:var(--gris);border:2px solid var(--gris3);border-radius:12px;padding:14px 12px;color:var(--blanco);font-weight:700;font-size:0.95rem;width:76px;text-align:center;flex-shrink:0;">🇲🇽 +52</div>
         <input id="welcome-tel" class="inp" type="tel" maxlength="10" placeholder="55 1234 5678"
@@ -1044,7 +1064,7 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
           onkeydown="if(event.key==='Enter') entrarConTel()"
           style="font-size:1.1rem;letter-spacing:2px;">
       </div>
-      <button onclick="entrarConTel()" style="background:var(--amarillo);border:none;border-radius:12px;padding:16px;width:100%;font-family:'Inter',sans-serif;font-weight:800;font-size:1rem;color:var(--negro);cursor:pointer;transition:background 0.2s;" onmouseover="this.style.background='#e6bc00'" onmouseout="this.style.background='var(--amarillo)'">
+      <button onclick="entrarConTel()" style="background:var(--gris);border:2px solid var(--gris3);border-radius:12px;padding:14px;width:100%;font-family:'Inter',sans-serif;font-weight:800;font-size:0.95rem;color:var(--blanco);cursor:pointer;">
         Continuar →
       </button>
       <div id="welcome-msg" style="font-size:0.82rem;font-weight:600;color:var(--rojo);margin-top:10px;min-height:18px;text-align:center;"></div>
@@ -1623,6 +1643,21 @@ body.modo-interno .mini-cart .mc-total::before { content: '📦 '; }
     <div class="logo">🍟 Crunchy<span> Paps</span></div>
   </div>
   <div style="padding:16px 16px 80px;">
+
+    <!-- INVITADO: sin teléfono verificado no hay cuenta que enseñar. Antes
+         renderCuenta salía en silencio y quedaba la pantalla en blanco, que se
+         lee como una app rota en vez de como «te falta identificarte». -->
+    <div id="cuenta-invitado" style="display:none;background:var(--gris);border-radius:14px;padding:20px;margin-bottom:16px;text-align:center;">
+      <div style="font-size:2.2rem;margin-bottom:8px;">👋</div>
+      <div style="font-family:'Bebas Neue',sans-serif;font-size:1.3rem;color:var(--amarillo);letter-spacing:1px;">ESTÁS COMO INVITADO</div>
+      <div style="font-size:0.82rem;font-weight:600;color:var(--suave);margin:8px 0 16px;line-height:1.45;">
+        Puedes ver el catálogo y armar tu carrito.<br>
+        Verifica tu número para guardar tus pedidos y acumular puntos.
+      </div>
+      <button onclick="ir('s-otp')" style="background:var(--amarillo);border:none;border-radius:10px;padding:13px;width:100%;font-family:'Inter',sans-serif;font-weight:800;font-size:0.9rem;color:var(--negro);cursor:pointer;">
+        📱 Verificar mi número
+      </button>
+    </div>
 
     <!-- Avatar y nombre -->
     <div style="text-align:center;padding:24px 0 20px;">
@@ -3819,8 +3854,32 @@ window.elegirTipo = function(tipo) {
   setTimeout(initRecaptcha, 400);
 };
 
+// Entrada de INVITADO. Esta función llevaba meses en el archivo sin un solo
+// llamador —quedó huérfana cuando la Sesión 21 quitó «comprar como consumidor»
+// de la pantalla de espera—, y es exactamente lo que hacía falta para abrir la
+// puerta. Se revive en vez de escribir una nueva.
+//
+// Sin sesión, `tipoCliente` = consumidor y `getPrecio` cae en
+// `precio_consumidor` por defecto: ver el catálogo NO revela precios de
+// mayoreo, que era la razón de negocio del muro. El OTP se exige al pagar.
+// Si el OTP se disparó DESDE el checkout, se vuelve al carrito y se reabre el
+// cajón — pero NO se reenvía el pedido solo. Autoenviar después de un rodeo por
+// otra pantalla es exactamente como se crean pedidos duplicados: el cliente
+// confirma él, viendo lo que confirma.
+function volverTrasVerificar(rutaNormal) {
+  return async function () {
+    if (!window._volverAlCheckout) { rutaNormal(); return; }
+    window._volverAlCheckout = false;
+    await irAlCatalogo();
+    try { abrirCarrito(); } catch (_e) {}
+    if (typeof mostrarToast === 'function') mostrarToast('✅ Número verificado. Revisa y confirma tu pedido.');
+  };
+}
+
 window.usarComoConsumidor = function() {
   tipoCliente = 'consumidor';
+  window._tipoCliente = 'consumidor';
+  esVendedor = false;
   irAlCatalogo();
 };
 
@@ -4004,9 +4063,9 @@ window.verificarCodigo = async function() {
         else if (tipo.includes('mayorista') || tipo.includes('distribuidor')) tipoCliente = 'mayorista';
         else tipoCliente = 'consumidor';
         if (tipoCliente === 'tienda' || tipoCliente === 'restaurante' || tipoCliente === 'mayorista') {
-          setTimeout(enrutarTrasLoginB2B, 400);   // gating B2B: catálogo solo si aprobada
+          setTimeout(volverTrasVerificar(enrutarTrasLoginB2B), 400);   // gating B2B: catálogo solo si aprobada
         } else {
-          setTimeout(irAlCatalogo, 400);
+          setTimeout(volverTrasVerificar(irAlCatalogo), 400);
         }
         // Encuesta F&F: si hay un pedido entregado sin encuesta, mostrarla
         if (!esVendedor) setTimeout(function(){ try { window.crunchyEncuesta && window.crunchyEncuesta.checarPendiente(telefonoVerif); } catch(_e){} }, 1500);
@@ -4018,7 +4077,7 @@ window.verificarCodigo = async function() {
       }
     } catch(e) {
       tipoCliente = 'consumidor';
-      setTimeout(irAlCatalogo, 400);
+      setTimeout(volverTrasVerificar(irAlCatalogo), 400);
     }
 
   } catch(e) {
@@ -4566,7 +4625,9 @@ async function irAlCatalogo() {
   track('view_catalog');
   // Header
   const telDisp = telefonoVerif.replace(/(\d{2})(\d{4})(\d{4})/,'$1 $2 $3');
-  document.getElementById('h-nombre').textContent = telDisp;
+  // Un invitado no tiene teléfono, y dejar el nombre vacío hace que la
+  // cabecera se vea a medio cargar. Se dice lo que es.
+  document.getElementById('h-nombre').textContent = telefonoVerif ? telDisp : 'Invitado';
   document.getElementById('h-tipo').textContent = esVendedor ? (vendedorInfo?.nombre||'Vendedor') : TIPO_LABELS[tipoCliente];
   const ht2 = document.getElementById('h-tipo2');
   if (ht2) ht2.textContent = esVendedor ? 'Vendedor' : TIPO_LABELS[tipoCliente];
@@ -6685,6 +6746,19 @@ function validarMinimosMayoreo() {
 }
 
 window.confirmarPedido = async function() {
+  // ── El OTP es forzoso para pedir ──────────────────────────────────
+  // Decisión de Abraham: «no quiero pedidos sin relación de consumidor real».
+  // El servidor ya lo exige (crear_pedido devuelve sesion_requerida), pero se
+  // comprueba aquí ANTES de armar el pedido para no hacerle perder el carrito a
+  // nadie: se guarda a dónde volver y se manda a verificar.
+  if (!esVendedor && !telefonoVerif) {
+    window._volverAlCheckout = true;
+    try { cerrarCarrito(); } catch (_e) {}
+    alert('📱 Ya casi. Verificamos tu número para confirmar el pedido — tu carrito se queda como está.');
+    ir('s-otp');
+    return;
+  }
+
   // ── Defensa antiduplicados (cliente) ─────────────────────────────
   // 1) Si ya hay una petición en vuelo, ignorar nuevos clicks
   if (_enviandoPedido) {
@@ -8336,7 +8410,22 @@ window.guardarPinPropio = async function() {
 };
 
 window.renderCuenta = function() {
-  if (!telefonoVerif) return;
+  const _inv = document.getElementById('cuenta-invitado');
+  if (!telefonoVerif) {
+    // No se oculta nada por debajo: los campos se rellenan como invitado y el
+    // panel de arriba explica qué falta. Ocultar bloques exigiría envolver la
+    // pantalla entera, y ese cambio estructural no vale el riesgo aquí.
+    if (_inv) _inv.style.display = '';
+    const pon = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    pon('cuenta-nombre', 'Invitado');
+    pon('cuenta-tipo', 'Sin registrar');
+    pon('cuenta-tel', '—');
+    pon('cuenta-pedidos', '0');
+    pon('cuenta-total', '$0');
+    pon('cuenta-puntos', '0');
+    return;
+  }
+  if (_inv) _inv.style.display = 'none';
   const tel = telefonoVerif.replace(/(\d{2})(\d{4})(\d{4})/, '+52 $1 $2 $3');
   document.getElementById('cuenta-tel').textContent = tel;
 
