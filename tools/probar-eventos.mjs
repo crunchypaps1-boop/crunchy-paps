@@ -73,6 +73,11 @@ const andamio = [
   '  addEventListener: (_n, f) => { globalThis.__oyenteVisibilidad = f; },',
   '};',
   'const window = {};',
+  // Doble de la costura window.cpAtribucion. La FUNCIÓN real se prueba aparte,',
+  '// recortada del bloque de arranque; aquí solo se comprueba que track() la usa.',
+  'window.cpAtribucion = (cual) => cual === "first"',
+  '  ? { utm_source: "ig", utm_campaign: "lanzamiento", t: Date.now() - 3 * 86400000 }',
+  '  : { utm_source: "fb", utm_campaign: "retargeting", t: Date.now() };',
   '',
 ].join('\n');
 
@@ -102,7 +107,9 @@ globalThis.fetch = async (u, o) => {
   const r = await fetchReal(u, o);
   const cuerpo = await r.clone().json().catch(() => null);
   if (cuerpo && cuerpo.insertados) filas += cuerpo.insertados;
-  respuestas.push({ ruta: String(u).split('/rpc/')[1], keepalive: !!o.keepalive, cuerpo });
+  let enviados = [];
+  try { enviados = JSON.parse(o.body).p_data.eventos || []; } catch (_e) {}
+  respuestas.push({ ruta: String(u).split('/rpc/')[1], keepalive: !!o.keepalive, cuerpo, enviados });
   return r;
 };
 const reiniciar = () => { peticiones = 0; filas = 0; respuestas = []; };
@@ -170,6 +177,87 @@ await esperar(2, 12000);
 comprobar('26 eventos = 2 peticiones, 26 filas (antes: 26 peticiones)',
           peticiones === 2 && filas === 26,
           'peticiones=' + peticiones + ' filas=' + filas);
+
+// ── La atribución: código real del BLOQUE DE ARRANQUE ─────────────────────
+// Se recorta igual que la cola, y se envuelve en visitar(qs) para poder simular
+// varias llegadas. El almacén es un Map: si fuera sessionStorage de verdad, esto
+// no probaría nada — el fallo que se corrige es justamente que moría con él.
+const fuenteAtrib = recortar('var CP_UTM_DIAS = 30;', '// id de sesión first-party');
+
+const atrib = await import('data:text/javascript;base64,' + Buffer.from([
+  'export const almacen = new Map();',
+  'const localStorage = {',
+  '  getItem: (k) => (almacen.has(k) ? almacen.get(k) : null),',
+  '  setItem: (k, v) => almacen.set(k, String(v)),',
+  '};',
+  'export const window = {};',
+  'let location = { search: "" };',
+  'export function visitar(qs) {',
+  '  location = { search: qs };',
+  fuenteAtrib,
+  '}',
+].join(String.fromCharCode(10))).toString('base64'));
+
+const dias = (n) => n * 86400000;
+
+atrib.visitar('?utm_source=ig&utm_medium=social&utm_campaign=lanzamiento');
+comprobar('llegada con UTM: se guardan primera y última',
+  atrib.window.cpAtribucion('first').utm_campaign === 'lanzamiento' &&
+  atrib.window.cpAtribucion('last').utm_campaign === 'lanzamiento',
+  'first=' + atrib.window.cpAtribucion('first').utm_campaign);
+
+// Cerrar la pestaña y volver: sessionStorage se habría vaciado. El almacén no.
+atrib.visitar('');
+comprobar('vuelve SIN UTM: la atribución sobrevive',
+  atrib.window.cpAtribucion('first').utm_source === 'ig' &&
+  atrib.window.cpAtribucion('last').utm_source === 'ig',
+  'first=' + atrib.window.cpAtribucion('first').utm_source);
+
+atrib.visitar('?utm_source=fb&utm_campaign=retargeting');
+comprobar('segunda campaña: cambia la última, NO la primera',
+  atrib.window.cpAtribucion('first').utm_campaign === 'lanzamiento' &&
+  atrib.window.cpAtribucion('last').utm_campaign === 'retargeting',
+  'first=' + atrib.window.cpAtribucion('first').utm_campaign +
+  ' last=' + atrib.window.cpAtribucion('last').utm_campaign);
+
+// Envejecer la primera 31 días: fuera de ventana es como si no hubiera nada.
+{
+  const o = JSON.parse(atrib.almacen.get('cp_utm_first'));
+  o.t = Date.now() - dias(31);
+  atrib.almacen.set('cp_utm_first', JSON.stringify(o));
+}
+comprobar('a los 31 días la primera deja de contar',
+  !atrib.window.cpAtribucion('first').utm_source, 'vencida');
+
+atrib.visitar('?utm_source=tiktok&utm_campaign=reto');
+comprobar('con la ventana vencida, una llegada nueva reinicia la primera',
+  atrib.window.cpAtribucion('first').utm_campaign === 'reto',
+  'first=' + atrib.window.cpAtribucion('first').utm_campaign);
+
+comprobar('una llegada sin UTM nunca borra lo guardado',
+  (atrib.visitar('?otra=cosa'),
+   atrib.window.cpAtribucion('first').utm_campaign === 'reto'), 'intacta');
+
+// ── track() usa la costura: última en las columnas, primera en purchase ──
+reiniciar();
+mod.track('view_item', { id: 1 });
+mod.track('purchase', { valor: 250 });
+await esperar(1, 9000);
+{
+  const ev = respuestas[0]?.enviados || [];
+  const vista = ev.find((e) => e.evento === 'view_item');
+  const compra = ev.find((e) => e.evento === 'purchase');
+  comprobar('las columnas utm_* llevan la ÚLTIMA atribución',
+    vista?.utmSource === 'fb' && vista?.utmCampaign === 'retargeting',
+    'utmSource=' + vista?.utmSource);
+  comprobar('purchase lleva además la PRIMERA, dentro de params',
+    compra?.params?.utm_first_campaign === 'lanzamiento' &&
+    compra?.params?.utm_first_dias === 3,
+    'first=' + compra?.params?.utm_first_campaign +
+    ' dias=' + compra?.params?.utm_first_dias);
+  comprobar('los eventos que no son purchase NO cargan la primera',
+    vista?.params?.utm_first_campaign === undefined, 'limpio');
+}
 
 let fallos = 0;
 for (const p of pruebas) {

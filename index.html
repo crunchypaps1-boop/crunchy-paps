@@ -19,14 +19,50 @@
 <!-- ═══════ GA4 + captura de UTM (R1 medición) ═══════ -->
 <script>
 (function () {
-  // 1) Capturar UTMs del landing y persistirlos en la sesión
-  //    (los lee la encuesta y, a futuro, la atribución de pedidos)
+  // 1) Capturar los UTM del landing y persistirlos POR 30 DÍAS.
+  //
+  //    Antes vivían en sessionStorage y por tanto MORÍAN al cerrar la pestaña:
+  //    quien llegaba por Instagram, cerraba, y volvía al día siguiente a comprar
+  //    quedaba registrado como tráfico directo. El sesgo no es simétrico —castiga
+  //    más a las campañas de efecto lento, que son casi todas las de marca—, así
+  //    que un tablero construido sobre eso te haría cortar justo lo que funciona.
+  //
+  //    Se guardan DOS atribuciones, porque elegir una sola es irreversible:
+  //      cp_utm_first  ¿quién trajo a esta persona?   (no se sobrescribe)
+  //      cp_utm_last   ¿qué la reactivó esta vez?     (se sobrescribe)
+  //
+  //    Lo que NO se movió: `cp_sid` sigue en sessionStorage. Es la VISITA, y
+  //    llevarlo a localStorage lo convertiría en un identificador de dispositivo
+  //    y rompería el embudo. Dos preguntas, dos vidas.
+  var CP_UTM_DIAS = 30;
+  var CP_UTM_CAMPOS = ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','gclid'];
+
+  // Lectura con ventana: fuera de los 30 días es como si no hubiera nada.
+  window.cpAtribucion = function (cual) {
+    try {
+      var raw = localStorage.getItem(cual === 'first' ? 'cp_utm_first' : 'cp_utm_last');
+      if (!raw) return {};
+      var o = JSON.parse(raw);
+      if (!o || !o.t || (Date.now() - o.t) > CP_UTM_DIAS * 86400000) return {};
+      return o;
+    } catch (e) { return {}; }
+  };
+
   try {
     var qs = new URLSearchParams(location.search);
-    ['utm_source','utm_medium','utm_campaign','utm_content','utm_term','gclid'].forEach(function (k) {
+    var llegada = {}, traeAlgo = false;
+    CP_UTM_CAMPOS.forEach(function (k) {
       var v = qs.get(k);
-      if (v) sessionStorage.setItem(k, v);
+      if (v) { llegada[k] = String(v).slice(0, 200); traeAlgo = true; }
     });
+    if (traeAlgo) {
+      llegada.t = Date.now();
+      localStorage.setItem('cp_utm_last', JSON.stringify(llegada));
+      // La primera solo se escribe si no hay ninguna viva: es lo que la hace
+      // "primera". Si la ventana ya venció, esta llegada empieza una nueva.
+      var prim = window.cpAtribucion('first');
+      if (!prim.t) localStorage.setItem('cp_utm_first', JSON.stringify(llegada));
+    }
   } catch (e) {}
 
   // id de sesión first-party (agrupa el recorrido de una visita para el log en Supabase)
@@ -3631,14 +3667,31 @@ function track(nombre, params) {
   // Dual-write first-party a Supabase (fire-and-forget; nunca bloquea ni rompe la app)
   try {
     var _g = function (k) { try { return sessionStorage.getItem(k) || ''; } catch (e) { return ''; } };
+    // Las columnas utm_* del evento llevan la ÚLTIMA atribución: "de dónde vino
+    // esta visita". La primera viaja solo en `purchase` (abajo), que es donde
+    // la atribución paga.
+    var _atr = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('last') : {};
+    var _params = params || {};
+    if (nombre === 'purchase') {
+      var _pri = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('first') : {};
+      if (_pri.utm_source || _pri.utm_campaign) {
+        // `params` es jsonb: cabe sin migración ni columnas nuevas.
+        _params = Object.assign({}, _params, {
+          utm_first_source:   _pri.utm_source   || '',
+          utm_first_medium:   _pri.utm_medium   || '',
+          utm_first_campaign: _pri.utm_campaign || '',
+          utm_first_dias:     Math.round((Date.now() - _pri.t) / 86400000),
+        });
+      }
+    }
     _evCola.push({ t: Date.now(), ev: {
       sessionId:   _g('cp_sid'),
       idCliente:   (clienteActual && clienteActual.id) ? clienteActual.id : null,
       evento:      nombre,
-      params:      params || {},
-      utmSource:   _g('utm_source'),
-      utmMedium:   _g('utm_medium'),
-      utmCampaign: _g('utm_campaign'),
+      params:      _params,
+      utmSource:   _atr.utm_source   || '',
+      utmMedium:   _atr.utm_medium   || '',
+      utmCampaign: _atr.utm_campaign || '',
       path:        location.pathname + location.search
     } });
     // `purchase` cierra el embudo y es el que más duele perder: sale ya.
@@ -16451,7 +16504,12 @@ function mostrarPagoConfirmado(ok) {
         recompra: estado.recompra,
         appFacilidad: estado.appFacilidad,
         comentario: (document.getElementById('ffe-comentario') || {}).value || '',
-        utmCampaign: (function () { try { return sessionStorage.getItem('utm_campaign') || ''; } catch (e) { return ''; } })()
+        utmCampaign: (function () {
+          try {
+            var a = (typeof window.cpAtribucion === 'function') ? window.cpAtribucion('last') : {};
+            return a.utm_campaign || '';
+          } catch (e) { return ''; }
+        })()
       };
       try {
         var res = await supabaseCall('POST', 'rpc/guardar_encuesta', { p_data: payload });
